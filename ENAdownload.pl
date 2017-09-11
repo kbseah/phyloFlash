@@ -3,6 +3,7 @@
 # Downloader script to test Fastq files from ENA and check if
 # 1. they are not SSU rRNA amplicon libraries and
 # 2. what is the read length
+# and to download the files if meeting criteria
 
 use 5.010; # For the 'say' command
 use strict;
@@ -12,16 +13,19 @@ use LWP::Simple;    # to read data from URLs
 use FindBin;
 use lib $FindBin::RealBin;
 use Getopt::Long;
+use POSIX;
 
 # Input params
 my $acc;
 my $CPUs = 8; # Num processors - for nhmmer
 my $SSUlimit = 3; # Max number of SSU reads to accept in first ten entries of metagenomic read file
+my $download = 1; # By default, download
 
 # Get input from command line
 GetOptions ("acc=s" => \$acc,
             "CPUs=i" => \$CPUs,
             "limit=i" => \$SSUlimit,
+            "download!" => \$download,
             ) or die ("Error with input options");
 
 # Variables
@@ -47,13 +51,13 @@ if (defined $fastq_urls[0]) {
     # Open log file to record details on this file
     open (my $logfh, ">", "$acc.download.log") or die ("Cannot open file: $!");
     # Header line for log file
-    say $logfh, join "\t", ("URL","SSU_reads_first10","seq_length");
+    say $logfh join "\t", ("URL","SSU_reads_first10","seq_length");
     foreach my $fastq (@fastq_urls) {
         my ($numSSU, $seqlength) = test_SSU_amplicon($fastq);
         say $logfh join "\t", ($fastq, $numSSU, $seqlength);
         if ($numSSU < $SSUlimit) {
             # Download file if it is not likely to be an SSU amplicon library
-            system (join " ", ($wget, $fastq));
+            system (join " ", ($wget, $fastq)) if ($download == 1);
         }
     }
     close ($logfh);
@@ -87,7 +91,7 @@ sub test_SSU_amplicon {
             $length += length($prevlines[$i]);
         }
     }
-    $length = $length / 10; # average length of first ten sequences
+    $length = floor($length / 10); # average length of first ten sequences
     close ($fafh);
 
     # Test against HMM
