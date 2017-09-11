@@ -11,15 +11,23 @@ use warnings;
 use LWP::Simple;    # to read data from URLs
 use FindBin;
 use lib $FindBin::RealBin;
+use Getopt::Long;
+
+# Input params
+my $acc;
+my $CPUs = 8; # Num processors - for nhmmer
+my $SSUlimit = 3; # Max number of SSU reads to accept in first ten entries of metagenomic read file
 
 # Get input from command line
-my $acc = $ARGV[0]; # ENA accession number
-my $CPUs = 8;
+GetOptions ("acc|s" => \$acc,
+            "CPUs|i" => \$CPUs,
+            "limit|i" => \$SSUlimit,
+            ) or die ("Error with input options");
 
 # Variables
 my @fastq_urls; # List of Fastq URLs
 my $nhmmer; # Nhmmer binary
-my $wget;   # Wget binary
+my $wget = "wget";   # Wget binary
 my $opsys = $^O; # Check operating system
 say STDERR "Current operating system $opsys";
 if ($opsys eq "darwin") {
@@ -34,9 +42,21 @@ my $hmm = "$FindBin::RealBin/barrnap-HGV/db/ssu/ssu_ABE.hmm"; # HMM for SSU rRNA
 ## MAIN ########################################################################
 
 @fastq_urls = get_fastq_urls($acc);
+# Check if any URLs were retrieved
 if (defined $fastq_urls[0]) {
-    my $prop = test_SSU_amplicon($fastq_urls[0]);
-    say join "\t", ($fastq_urls[0], $prop);
+    # Open log file to record details on this file
+    open (my $logfh, ">", "$acc.download.log") or die ("Cannot open file: $!");
+    # Header line for log file
+    say $logfh, join ("\t", ("URL","SSU_reads_first10","seq_length"));
+    foreach my $fastq (@fastq_urls {
+        my ($numSSU, $seqlength) = test_SSU_amplicon($fastq);
+        say $logfh join "\t", ($fastq, $numSSU, $seqlength);
+        if ($numSSU > $SSUlimit) {
+            # Download file if it is not likely to be an SSU amplicon library
+            system (join " ", ($wget, $fastq));
+        }
+    }
+    close ($logfh);
 }
 
 ## SUBS ########################################################################
@@ -52,6 +72,7 @@ sub test_SSU_amplicon {
     # Convert to Fasta file
     my @prevlines = split /\n/, $preview;
     open (my $fafh, ">", "tmp.$acc.fasta") or die ("Cannot open file: $!");
+    my $length; # Length of sequence
     for (my $i=0; $i<39; $i++) {
         if (($i+1)%4 == 1) {
             # Header line
@@ -63,8 +84,10 @@ sub test_SSU_amplicon {
             # Sequence line
             print $fafh $prevlines[$i];
             print $fafh "\n";
+            $length += length($prevlines[$i]);
         }
     }
+    $length = $length / 10; # average length of first ten sequences
     close ($fafh);
 
     # Test against HMM
@@ -87,7 +110,7 @@ sub test_SSU_amplicon {
     close ($tblfh);
     # Report number of amplicon hits
     my $hits = scalar (keys %heads);
-    return $hits;
+    return ($hits, $length);
 }
 
 sub get_fastq_urls {
