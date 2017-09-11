@@ -20,17 +20,22 @@ my $acc;
 my $CPUs = 8; # Num processors - for nhmmer
 my $SSUlimit = 3; # Max number of SSU reads to accept in first ten entries of metagenomic read file
 my $download = 1; # By default, download
+my $run_pF = 0; # By default, do not run phyloFlash
+my $pF_dbhome;
 
 # Get input from command line
 GetOptions ("acc=s" => \$acc,
             "CPUs=i" => \$CPUs,
             "limit=i" => \$SSUlimit,
             "download!" => \$download,
+            "phyloFlash!" => \$run_pF,
+            "dbhome=s" => \$pF_dbhome,
             ) or die ("Error with input options");
 
 # Variables
 my @fastq_urls; # List of Fastq URLs
 my $nhmmer; # Nhmmer binary
+my $phyloFlash = "$FindBin::RealBin/phyloFlash.pl"; # phyloFlash script
 my $wget = "wget";   # Wget binary
 my $opsys = $^O; # Check operating system
 say STDERR "Current operating system $opsys";
@@ -46,6 +51,7 @@ my $hmm = "$FindBin::RealBin/barrnap-HGV/db/ssu/ssu_ABE.hmm"; # HMM for SSU rRNA
 ## MAIN ########################################################################
 
 @fastq_urls = get_fastq_urls($acc);
+my @fastq_basenames;
 # Check if any URLs were retrieved
 if (defined $fastq_urls[0]) {
     # Open log file to record details on this file
@@ -59,9 +65,28 @@ if (defined $fastq_urls[0]) {
             # Download file if it is not likely to be an SSU amplicon library
             system (join " ", ($wget, $fastq)) if ($download == 1);
         }
+        # Strip URL dirs from filename, save to an array
+        my $filename = $1 if $fastq =~ m/([^\/]+)$/;
+        push @fastq_basenames, $filename;
     }
     close ($logfh);
 }
+# Run phyloFlash (v3.0beta1) to extract SSU reads
+my @pF_args = ("-lib pF_$acc",
+               "-dbhome $pF_dbhome",
+               "-CPUs $CPUs",
+               "-skip_spades",
+               "-zip",
+               "-log",
+               );
+# Check how many Fastq files (paired or unpaired)
+if (scalar (@fastq_basenames) == 1) {
+    push @pF_args, "-read1 ".$fastq_basenames[0];
+} elsif (scalar (@fastq_basenames) == 2) {
+    push @pF_args, "-read1 ".$fastq_basenames[0];
+    push @pF_args, "-read2 ".$fastq_basenames[1];
+}
+system (join " ", ($phyloFlash, @pF_args)) if $run_pF == 1;
 
 ## SUBS ########################################################################
 
