@@ -19,9 +19,9 @@ my $CPUs = 8; # Num processors - for nhmmer
 my $SSUlimit = 3; # Max number of SSU reads to accept in first ten entries of metagenomic read file
 
 # Get input from command line
-GetOptions ("acc|s" => \$acc,
-            "CPUs|i" => \$CPUs,
-            "limit|i" => \$SSUlimit,
+GetOptions ("acc=s" => \$acc,
+            "CPUs=i" => \$CPUs,
+            "limit=i" => \$SSUlimit,
             ) or die ("Error with input options");
 
 # Variables
@@ -47,11 +47,11 @@ if (defined $fastq_urls[0]) {
     # Open log file to record details on this file
     open (my $logfh, ">", "$acc.download.log") or die ("Cannot open file: $!");
     # Header line for log file
-    say $logfh, join ("\t", ("URL","SSU_reads_first10","seq_length"));
-    foreach my $fastq (@fastq_urls {
+    say $logfh, join "\t", ("URL","SSU_reads_first10","seq_length");
+    foreach my $fastq (@fastq_urls) {
         my ($numSSU, $seqlength) = test_SSU_amplicon($fastq);
         say $logfh join "\t", ($fastq, $numSSU, $seqlength);
-        if ($numSSU > $SSUlimit) {
+        if ($numSSU < $SSUlimit) {
             # Download file if it is not likely to be an SSU amplicon library
             system (join " ", ($wget, $fastq));
         }
