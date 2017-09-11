@@ -270,6 +270,7 @@ my $skip_spades = 0;            # Flag - skip SPAdes assembly? (default = 0, no)
 my $poscov_flag = 0;            # Flag - use Nhmmer to estimate positional coverage? (Default = 0, no)
 my $sc          = 0;            # Flag - single cell data? (default = 0, no)
 my $zip         = 0;            # Flag - Compress output into archive? (default = 0, no)
+my $slim        = 0;            # Flag - Run the "slim" pipeline? (Default = 0, no)
 my $check_env   = 0;            # Check environment (runs check_environment subroutine only)
 my $save_log    = 0;            # Save STDERR messages to log (Default = 0, no)
 my $keeptmp     = 0;            # Do not delete temporary files (Default = 0, do delete temporary files)
@@ -420,6 +421,7 @@ sub parse_cmdline {
                'sc' => \$sc,
                'zip!' => \$zip,
                'log!' => \$save_log,
+               'slim' => \$slim,
                'keeptmp!' => \$keeptmp,
                'everything' => \$everything,
                'almosteverything' => \$almosteverything,
@@ -549,6 +551,13 @@ sub parse_cmdline {
             # "almost everything" does not turn on EMIRGE
             msg ("Running \"everything\" except EMIRGE- overrides other command line options");
         }
+    }
+    # Activate only necessary outputs if "slim" is asked for
+    if ($slim == 1) {
+        $poscov_flag = 0;
+        $html_flag = 0;
+        $zip = 1;
+        $save_log = 1;
     }
 }
 
@@ -747,7 +756,7 @@ sub write_csv {
         open_or_die(\$fh, ">", $outfiles{"full_len_class"}{"filename"});
         $outfiles{"full_len_class"}{"made"}++;
         print $fh "OTU,read_cov,coverage,dbHit,taxonomy,%id,alnlen,evalue\n"; # Header
-        
+
         # Sort descending by read counts
         foreach my $seqid (sort {$ssufull_hash{$b}{"counts"} <=> $ssufull_hash{$a}{"counts"}} keys %ssufull_hash) {
             my @out;
@@ -1090,6 +1099,57 @@ sub spades_run {
     $outfiles{"spades_log"}{"made"}++;
 
     msg("done...");
+}
+
+sub spades_run_no_die {
+    # running SPADES on bbmap output
+    msg("creating phylotypes with SPAdes");
+
+    my $kmer;
+    if ($readlength >= 134) {
+        $kmer = "99,111,127";
+    } else {
+        my $spades_rl = $readlength - $readlength % 2; # drop to even number
+        $kmer = ($spades_rl - 27).",".($spades_rl - 17).",".($spades_rl - 7);
+    }
+    msg ("kmers for SPAdes are ".$kmer);
+
+    my $args = "";
+    if ($sc == 1) {
+      $args = '--sc ';
+    }
+    if ($SEmode == 1) {
+        $args = $args."-s ".$outfiles{"reads_mapped_f"}{"filename"};
+    } else {
+        $args = $args."-1 ".$outfiles{"reads_mapped_f"}{"filename"}
+                ." -2 ".$outfiles{"reads_mapped_r"}{"filename"};
+    }
+
+    # Limit number of SPAdes processors to 24 - if run on a server with all 64
+    # processors SPAdes will exceed max memory and crash
+    my $cpus_spades = $cpus > 24 ? 24 : $cpus;
+
+    my $cmd = join " ", ("spades.py",
+                         "-o $libraryNAME.spades",
+                         "-t $cpus_spades",
+                         "-m 20",
+                         "-k $kmer",
+                         $args,
+                         ">",
+                         $outfiles{"spades_log"}{"filename"},
+                         "&1");
+
+    # Run SPAdes; if run fails, report but don't die
+    my $errcode = system($cmd);
+    if ($errcode == 0) {
+        $outfiles{"spades_log"}{"made"}++;
+        msg("done...");
+    } else {
+        msg("SPAdes run failed!",
+            "Error was '$!' and return code '$?'");
+    }
+    # Return error code
+    return $errcode;
 }
 
 sub spades_parse {
@@ -1593,7 +1653,7 @@ sub vsearch_parse {
         # lib.PFspades_1_1.23332\tAH12345.1.1490 Bacteria;...\t...
         s/PF(\w+)_([^_]+)_([^\t]+)\t(\w+\.\d+\.\d+)\s/PF$1_$2\t$3\t$4\t/;
         push @vsearch_matches, [split("\t",$_)];                                # To be replaced by ssufull_hash
-        
+
         # Split into individual fields
         my @line = split /\t/, $_;
         my $seqid = $line[0];
@@ -1604,7 +1664,7 @@ sub vsearch_parse {
         } elsif ($line[0] =~ m/PFemirge/) {
             $source = "EMIRGE";
         }
-        
+
         #fields: qw(source cov dbHit taxon pcid alnlen evalue); counts added later
         $ssufull_hash{$seqid}{"source"} = $source;
         $ssufull_hash{$seqid}{"cov"} = $line[1];
@@ -1613,7 +1673,7 @@ sub vsearch_parse {
         $ssufull_hash{$seqid}{"pcid"} = $line[4];
         $ssufull_hash{$seqid}{"alnlen"} = $line[5];
         $ssufull_hash{$seqid}{"evalue"} = $line[6];
-        
+
     }
     close($fh);
 
@@ -2137,7 +2197,7 @@ sub write_report_html {
 
         # Table of assembled SSU sequences
         my @table_assem_seq;
-        
+
         foreach my $seqid (sort { $ssufull_hash{$b}{"counts"} <=> $ssufull_hash{$a}{"counts"} } keys %ssufull_hash) {
             # Check that sequence was assembled by spades
             next unless $ssufull_hash{$seqid}{"source"} eq "SPAdes";
@@ -2165,7 +2225,7 @@ sub write_report_html {
     if ($skip_emirge == 0) {
         $flags {"INS_USED"} = $ins_used;
         my @table_recon_seq;
-        
+
         foreach my $seqid (sort {$ssufull_hash{$b}{"counts"} <=> $ssufull_hash{$a}{"counts"} } keys %ssufull_hash) {
             # Check that sequence was assembled by spades
             next unless $ssufull_hash{$seqid}{"source"} eq "EMIRGE";
@@ -2270,11 +2330,18 @@ nhmmer_model_pos() if ($poscov_flag == 1 );
 
 # Run SPAdes if not explicitly skipped
 if ($skip_spades == 0) {
-    spades_run();
-    spades_parse();
-    bbmap_remap("SPAdes");
-    #bbmap_spades_out();
-    #taxonomy_spades_unmapped();
+    if ($slim == 1) {
+        # If "slim" pipeline, don't stop script if SPAdes fails
+        my $errcode = spades_run_no_die();
+        if ($errcode == 0) {
+            spades_parse();
+            bbmap_remap("SPAdes");
+        }
+    } else {
+        spades_run();
+        spades_parse();
+        bbmap_remap("SPAdes");
+    }
 }
 # Run Emirge if not explicitly skipped
 if ($skip_emirge == 0) {
@@ -2284,10 +2351,13 @@ if ($skip_emirge == 0) {
 }
 # If at least one of either SPAdes or Emirge is activated, parse results
 if ($skip_spades + $skip_emirge < 2) {
-    vsearch_best_match();
-    vsearch_parse();
-    vsearch_cluster();
-    mafft_run();
+    # Do not run vsearch if "slim" pipeline
+    if ($slim == 0) {
+        vsearch_best_match();
+        vsearch_parse();
+        vsearch_cluster();
+        mafft_run();
+    }
     screen_remappings();
 }
 
